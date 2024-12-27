@@ -61,6 +61,8 @@ export async function generateText({
     modelClass: string;
     stop?: string[];
 }): Promise<string> {
+    console.log("generateText context", context);
+    console.log("###########################################");
     if (!context) {
         console.error("generateText context is empty");
         return "";

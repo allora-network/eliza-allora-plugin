@@ -42,6 +42,7 @@ import {
     webhookPlugin,
 } from "@elizaos/plugin-coinbase";
 import { confluxPlugin } from "@elizaos/plugin-conflux";
+import { alloraPlugin } from "@elizaos/plugin-allora";
 import { evmPlugin } from "@elizaos/plugin-evm";
 import { storyPlugin } from "@elizaos/plugin-story";
 import { flowPlugin } from "@elizaos/plugin-flow";
@@ -504,6 +505,7 @@ export async function createAgent(
         // character.plugins are handled when clients are added
         plugins: [
             bootstrapPlugin,
+            alloraPlugin,
             getSecret(character, "CONFLUX_CORE_PRIVATE_KEY")
                 ? confluxPlugin
                 : null,
