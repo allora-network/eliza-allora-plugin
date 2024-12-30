@@ -2,7 +2,7 @@ import {
     ActionExample,
     composeContext,
     elizaLogger,
-    generateObjectDeprecated,
+    generateObject,
     HandlerCallback,
     IAgentRuntime,
     Memory,
@@ -10,37 +10,15 @@ import {
     State,
     type Action,
 } from "@elizaos/core";
+import { z } from "zod";
 import { topicsProvider } from "../providers/topics";
 import { AlloraAPIClient } from "../providers/allora-api";
+import { getInferenceTemplate } from "../templates";
 
-const getInferenceTemplate = `Respond with a JSON markdown block containing only the extracted values. Use null for any values that cannot be determined.
-Example response:
-\`\`\`json
-{
-    "topicId": "1",
-    "topicName": "Topic Name",
+interface InferenceFields {
+    topicId: string | null;
+    topicName: string | null;
 }
-\`\`\`
-
-Recent messages:
-{{recentMessages}}
-
-Allora Network Topics:
-{{alloraTopics}}
-
-Given the recent messages and the Allora Network Topics above, extract the following information about the requested:
-- Topic ID of the topic that best matches the user's request. The topic should be active, otherwise return null.
-- Topic Name of the topic that best matches the user's request. The topic should be active, otherwise return null.
-
-If the topic is not active or the prediction timeframe is not matching the user's request, return null for both topicId and topicName.
-
-Respond with a JSON markdown block containing only the extracted values. Use null for any values that cannot be determined. The result should be a valid JSON object with the following schema:
-\`\`\`json
-{
-    "topicId": string | null,
-    "topicName": string | null,
-}
-\`\`\``;
 
 export const getInferenceAction: Action = {
     name: "GET_INFERENCE",
@@ -61,7 +39,7 @@ export const getInferenceAction: Action = {
         options: { [key: string]: unknown },
         callback: HandlerCallback
     ): Promise<boolean> => {
-        // Compose state if it doesn't exist
+        // Initialize or update state
         if (!state) {
             state = (await runtime.composeState(message)) as State;
         } else {
@@ -71,18 +49,27 @@ export const getInferenceAction: Action = {
         // Get Allora topics information from the provider
         state.alloraTopics = await topicsProvider.get(runtime, message, state);
 
-        // Extract topic id for retrieving inference from Allora API
+        // Compose context for extracting the inference fields
         const inferenceTopicContext = composeContext({
             state,
             template: getInferenceTemplate,
         });
-        const response = await generateObjectDeprecated({
-            runtime,
-            context: inferenceTopicContext,
-            modelClass: ModelClass.LARGE,
+
+        // Define the schema for extracting the inference fields
+        const schema = z.object({
+            topicId: z.string().nullable(),
+            topicName: z.string().nullable(),
         });
 
-        if (!response.topicId) {
+        const results = await generateObject({
+            runtime,
+            context: inferenceTopicContext,
+            modelClass: ModelClass.SMALL,
+            schema,
+        });
+        const inferenceFields = results.object as InferenceFields;
+
+        if (!inferenceFields.topicId || !inferenceFields.topicName) {
             callback({
                 text: "There is no active Allora Network topic that matches your request.",
             });
@@ -90,7 +77,7 @@ export const getInferenceAction: Action = {
         }
 
         elizaLogger.info(
-            `Retrieving inference for topic ID: ${response.topicId}`
+            `Retrieving inference for topic ID: ${inferenceFields.topicId}`
         );
 
         try {
@@ -101,13 +88,13 @@ export const getInferenceAction: Action = {
             );
 
             const inferenceRes = await alloraApiClient.getInference(
-                response.topicId
+                inferenceFields.topicId
             );
             const inferenceValue =
                 inferenceRes.inference_data.network_inference_normalized;
 
             callback({
-                text: `Inference provided by Allora Network on topic ${response.topicName} (Topic ID: ${response.topicId}): ${inferenceValue}`,
+                text: `Inference provided by Allora Network on topic ${inferenceFields.topicName} (Topic ID: ${inferenceFields.topicId}): ${inferenceValue}`,
             });
             return true;
         } catch (error) {
