@@ -1,42 +1,30 @@
-import { IAgentRuntime, Memory, Provider, State } from "@elizaos/core";
+import {
+    elizaLogger,
+    IAgentRuntime,
+    Memory,
+    Provider,
+    State,
+} from "@elizaos/core";
+import { AlloraAPIClient, AlloraTopic } from "./allora-api";
+import NodeCache from "node-cache";
 
-const ALLORA_CHAIN_ID = "allora-testnet-1";
-const BASE_UPSHOT_API_URL = "https://api.upshot.xyz/v2";
+class TopicsProvider implements Provider {
+    private cache: NodeCache;
 
-class UpshotAPIClient {
-    private apiKey: string;
-    private baseUrl: string;
-
-    constructor(apiKey: string) {
-        this.apiKey = apiKey;
-        this.baseUrl = `${BASE_UPSHOT_API_URL}/allora/${ALLORA_CHAIN_ID}`;
+    constructor() {
+        this.cache = new NodeCache({ stdTTL: 30 * 60 }); // Cache TTL set to 30 minutes
     }
 
-    async getAlloraTopics(): Promise<any[]> {
-        const response = await fetch(`${this.baseUrl}/topics`, {
-            headers: {
-                "x-api-key": this.apiKey,
-            },
-        });
-        const res = await response.json();
-        return res.data.topics;
-    }
-}
+    async get(
+        runtime: IAgentRuntime,
+        _message: Memory,
+        _state?: State
+    ): Promise<string | null> {
+        const alloraTopics = await this.getAlloraTopics(runtime);
 
-export const topicsProvider: Provider = {
-    get: async (runtime: IAgentRuntime, _message: Memory, _state?: State) => {
-        console.log("Inside topics provider");
-        const upshotApiKey = runtime.getSetting("UPSHOT_API_KEY");
-
-        if (!upshotApiKey) {
-            throw new Error("UPSHOT_API_KEY is not set");
-        }
-
-        const upshotClient = new UpshotAPIClient(upshotApiKey);
-        const rawTopics = await upshotClient.getAlloraTopics();
-
+        // Format the topics into a string to be added to the prompt context
         let output = `Allora Network Topics: \n`;
-        for (const topic of rawTopics) {
+        for (const topic of alloraTopics) {
             output += `Topic Name: ${topic.topic_name}\n`;
             output += `Topic Description: ${topic.description}\n`;
             output += `Topic ID: ${topic.topic_id}\n`;
@@ -46,5 +34,35 @@ export const topicsProvider: Provider = {
         }
 
         return output;
-    },
-};
+    }
+
+    private async getAlloraTopics(
+        runtime: IAgentRuntime
+    ): Promise<AlloraTopic[]> {
+        const cacheKey = "allora-topics";
+        const cachedValue = this.cache.get<AlloraTopic[]>(cacheKey);
+
+        // If the topics are aready cached, return them
+        if (cachedValue) {
+            elizaLogger.info("Retrieving Allora topics from cache");
+            return cachedValue;
+        }
+
+        // If the topics are not cached, retrieve them from the Allora API
+        const alloraApiKey = runtime.getSetting("ALLORA_API_KEY");
+        const alloraChainSlug = runtime.getSetting("ALLORA_CHAIN_SLUG");
+
+        const alloraApiClient = new AlloraAPIClient(
+            alloraChainSlug,
+            alloraApiKey
+        );
+        const alloraTopics = await alloraApiClient.getAllTopics();
+
+        // Cache the retrieved topics
+        this.cache.set(cacheKey, alloraTopics);
+
+        return alloraTopics;
+    }
+}
+
+export const topicsProvider = new TopicsProvider();

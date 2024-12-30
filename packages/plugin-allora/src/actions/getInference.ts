@@ -1,6 +1,7 @@
 import {
     ActionExample,
     composeContext,
+    elizaLogger,
     generateObjectDeprecated,
     HandlerCallback,
     IAgentRuntime,
@@ -10,6 +11,7 @@ import {
     type Action,
 } from "@elizaos/core";
 import { topicsProvider } from "../providers/topics";
+import { AlloraAPIClient } from "../providers/allora-api";
 
 const getInferenceTemplate = `Respond with a JSON markdown block containing only the extracted values. Use null for any values that cannot be determined.
 Example response:
@@ -20,13 +22,13 @@ Example response:
 }
 \`\`\`
 
+Recent messages:
 {{recentMessages}}
 
-Given the recent messages and the Allora Network Topics below:
-
+Allora Network Topics:
 {{alloraTopics}}
 
-Extract the following information about the requested :
+Given the recent messages and the Allora Network Topics above, extract the following information about the requested:
 - Topic ID of the topic that best matches the user's request. The topic should be active, otherwise return null.
 - Topic Name of the topic that best matches the user's request. The topic should be active, otherwise return null.
 
@@ -44,101 +46,122 @@ export const getInferenceAction: Action = {
     name: "GET_INFERENCE",
     similes: [
         "GET_ALLORA_INFERENCE",
-        "GET_INFERENCE",
-        "GET_INFERENCE_FROM_ALLORA",
-        "GET_INFERENCE_FROM_ALLORA_AGENT",
+        "GET_TOPIC_INFERENCE",
         "ALLORA_INFERENCE",
+        "TOPIC_INFERENCE",
     ],
     validate: async (_runtime: IAgentRuntime, _message: Memory) => {
         return true;
     },
     description: "Get inference from Allora Network",
     handler: async (
-        _runtime: IAgentRuntime,
-        _message: Memory,
-        _state: State,
-        _options: { [key: string]: unknown },
-        _callback: HandlerCallback
+        runtime: IAgentRuntime,
+        message: Memory,
+        state: State,
+        options: { [key: string]: unknown },
+        callback: HandlerCallback
     ): Promise<boolean> => {
-        // composeState
-        if (!_state) {
-            _state = (await _runtime.composeState(_message)) as State;
+        // Compose state if it doesn't exist
+        if (!state) {
+            state = (await runtime.composeState(message)) as State;
         } else {
-            _state = await _runtime.updateRecentMessageState(_state);
+            state = await runtime.updateRecentMessageState(state);
         }
 
-        const alloraTopics = await topicsProvider.get(
-            _runtime,
-            _message,
-            _state
-        );
-        _state.alloraTopics = alloraTopics;
+        // Get Allora topics information from the provider
+        state.alloraTopics = await topicsProvider.get(runtime, message, state);
 
-        const inferenceContext = composeContext({
-            state: _state,
+        // Extract topic id for retrieving inference from Allora API
+        const inferenceTopicContext = composeContext({
+            state,
             template: getInferenceTemplate,
         });
-
         const response = await generateObjectDeprecated({
-            runtime: _runtime,
-            context: inferenceContext,
+            runtime,
+            context: inferenceTopicContext,
             modelClass: ModelClass.LARGE,
         });
 
         if (!response.topicId) {
-            _callback({
-                text: "I couldn't find an active Allora Network topic that matches your request",
+            callback({
+                text: "There is no active Allora Network topic that matches your request.",
             });
-            return true;
+            return false;
         }
 
-        _callback({
-            text: `Hang in tight, I'm fetching that from Allora Network...`,
-        });
-
-        const res = await fetch(
-            `https://allora-api.testnet.allora.network/emissions/v7/latest_network_inferences/${response.topicId}`,
-            {
-                method: "GET",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-            }
+        elizaLogger.info(
+            `Retrieving inference for topic ID: ${response.topicId}`
         );
 
-        const data = await res.json();
-        const actualData = data["network_inferences"]["combined_value"];
+        try {
+            // Get inference from Allora API
+            const alloraApiClient = new AlloraAPIClient(
+                runtime.getSetting("ALLORA_CHAIN_SLUG"),
+                runtime.getSetting("ALLORA_API_KEY")
+            );
 
-        _callback({
-            text: `Inference provided by Allora Network on topic ${response.topicName} (ID: ${response.topicId}): ${actualData}`,
-        });
+            const inferenceRes = await alloraApiClient.getInference(
+                response.topicId
+            );
+            const inferenceValue =
+                inferenceRes.inference_data.network_inference_normalized;
 
-        return true;
+            callback({
+                text: `Inference provided by Allora Network on topic ${response.topicName} (Topic ID: ${response.topicId}): ${inferenceValue}`,
+            });
+            return true;
+        } catch (error) {
+            const errorMessage =
+                error instanceof Error ? error.message : String(error);
+            const displayMessage = `There was an error fetching the inference from Allora Network: ${errorMessage}`;
+
+            elizaLogger.error(displayMessage);
+            callback({
+                text: displayMessage,
+            });
+            return false;
+        }
     },
     examples: [
         [
             {
                 user: "{{user1}}",
-                content: { text: "Hey, get me some inference from Allora" },
-            },
-            {
-                user: "{{user2}}",
-                content: { text: "", action: "GET_INFERENCE" },
-            },
-        ],
-
-        [
-            {
-                user: "{{user1}}",
                 content: {
-                    text: "Hey, what is the predicted price of SOL in 24 hours?",
+                    text: "What is the predicted ETH price in 5 minutes?",
                 },
             },
             {
                 user: "{{user2}}",
                 content: {
-                    text: "",
+                    text: "I'll get the inference now...",
                     action: "GET_INFERENCE",
+                },
+            },
+            {
+                user: "{{user2}}",
+                content: {
+                    text: "Inference provided by Allora Network on topic ETH 5min Prediction (ID: 13): 3393.364326646801085508",
+                },
+            },
+        ],
+        [
+            {
+                user: "{{user1}}",
+                content: {
+                    text: "What is the predicted price of gold in 24 hours?",
+                },
+            },
+            {
+                user: "{{user2}}",
+                content: {
+                    text: "I'll get the inference now...",
+                    action: "GET_INFERENCE",
+                },
+            },
+            {
+                user: "{{user2}}",
+                content: {
+                    text: "There is no active Allora Network topic that matches your request.",
                 },
             },
         ],

@@ -3,8 +3,8 @@ import { getInferenceAction } from "./actions/getInference.ts";
 import { topicsProvider } from "./providers/topics.ts";
 
 export const alloraPlugin: Plugin = {
-    name: "allora",
-    description: "Agent allora with basic actions and evaluators",
+    name: "Allora Network plugin",
+    description: "Allora Network plugin for Eliza",
     actions: [getInferenceAction],
     evaluators: [],
     providers: [topicsProvider],
