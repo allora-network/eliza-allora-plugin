@@ -8,7 +8,7 @@ import {
 import { AlloraAPIClient, AlloraTopic } from "./allora-api";
 import NodeCache from "node-cache";
 
-class TopicsProvider implements Provider {
+export class TopicsProvider implements Provider {
     private cache: NodeCache;
 
     constructor() {
